@@ -8,39 +8,42 @@ The challenge was to combine user activity data, title metadata, and platform in
 
 My role involved:
 - Planning the data extraction,
-- Database design, and 
+- Database design,
 - Estimation methodology.
 
 ## 2. Challenges and Requirements
 
 ### Key Challenges:
-- **API Limitations & Privacy Restrictions**: Data was available for only 1 in 4 users, requiring a careful sampling strategy.
-- **Time Zone Differences**: Multiple daily data requests were needed to align with different markets' peak activity times.
-- **Large-Scale Data Handling**: The database had to handle thousands of titles across numerous markets while maintaining scalability and accuracy.
-- **Sampling Biases**: Robust stratified sampling was required to ensure representativity across markets and genres.
-- **Data Discrepancies**: Handling differences between system estimates and factual market data required constant model adjustments.
+- **API Limitations & Privacy Restrictions**: Data was available for only 1 in 4 users, due to privacy settings, making it difficult to capture a fully representative sample. This required careful planning of the sampling strategy and the frequency of data retrieval to maximize data coverage.
+- **Time Zone Differences**: With gaming activity happening at different times in various countries, retrieving data at appropriate intervals was crucial. For accurate MAU estimates, the solution involved making multiple daily data requests, adjusted for different markets’ peak activity times.
+- **Large-Scale Data Handling**: The database needed to process data for thousands of titles across dozens of markets. Scalability was essential to ensure that data retrieval, storage, and processing were efficient, while the results remained accurate.
+- **Sampling Biases**: Given that not all users opted to share their activity data, developing a robust sampling strategy was critical. It involved applying stratified sampling techniques to ensure representative data collection across both geographic regions and genres.
+- **Data Discrepancies**: At times, the MAU estimates produced by the system will differ from factual market data. It was important to respond to client concerns, reconcile differences, and adjust the estimation models as needed.
 
 ### Project Requirements:
-- Real-time updates for MAU estimates.
-- Effective sampling strategies to ensure data accuracy.
-- Efficient database design and query performance optimization.
+- Modelling a database that could support real-time updates for MAU estimates..
+- Ensuring the sampling strategy accounted for privacy restrictions and geographic diversity.
+- Considering automated checks and testing to ensure data quality and accuracy before sharing results with clients.
 
 ## 3. Data Sources
 
-The project utilized several API endpoints and internal data sources:
+The project needed to utilzie several API endpoints, alongside internal data sources, to estimate Monthly Active Users (MAUs) for individual game titles. Each data source played a crucial role in building a comprehensive understanding of user activity. The main data sources included:
 
-- **User Activity Endpoint**: Provides title_id for active gaming sessions, accounting for privacy restrictions.
-- **User Metadata Endpoint**: Contains user-specific data like user_id and country_code for geographic representation.
-- **Title Metadata Endpoint**: Information on video game titles like title_id, name, and genre.
-- **Install Base Data**: Internal data on the active user base, crucial for scaling MAUs.
+- **User Activity Endpoint**: Provided information about what titles users were playing and when they were active. This endpoint returned a title_id if a user was currently playing a game or “Offline” if they were not. Due to privacy settings, this data was only available for about 25% of users, requiring careful sampling to ensure accurate estimations.
+- **User Metadata Endpoint**: Contained user-specific data such as user_id, country_code, and creation_date. This was used to identify users’ countries and ensure accurate representation of different markets. The metadata was retrieved daily to account for new users joining the platform.
+- **Title Metadata Endpoint**: Featured information on video game titles, such as title_id, name, genre, and release_date. This endpoint was essential for mapping user activity data to specific titles, and it helped categorize and filter games for MAU calculations.
+- **Install Base Data**: : This internally available data provided yearly estimates of the active user base for each market, which was critical for scaling the sampled MAUs to population-wide estimates.
 
 ## 4. Approach and Solution
+The approach to estimating Monthly Active Users (MAUs) for individual titles and markets involved several key phases, ranging from planning data extraction to the final calculation of estimates. Below is a breakdown of the process:
 
 ### 4.1 Data Extraction
-The following data extraction process was implemented:
-- **User Activity Endpoint**: Data retrieved every 30 minutes to capture gaming sessions across time zones.
-- **User Metadata & Title Metadata Endpoints**: Data retrieved daily to account for new users and games.
-
+The first step was to define which data to extract when from the available API endpoints. This involved the following actions:
+- **User Activity Endpoint**: Data should be retrieved every 30 minutes to capture gaming sessions across different time zones and ensure adequate coverage of user activity. The extracted data included user_id and title_id, indicating which games users were playing at specific times.
+- **User Metadata**: This data should be retrieved once a day to account for new users joining the platform. It included user_id and country_code, linking users to specific geographic markets.
+- **Title Metadata Endpoints**: By pulling data daily, this endpoint provides information on new game releases and ensures that MAU estimates are linked to correct and up-to-date title information.
+- **Internal Install Base Data**: Used to extrapolate the sampled MAUs to the population level for each country. The install base data provides the overall active user estimates for each market.
+ 
 ### 4.2 Database Design
 A relational database was designed to handle large volumes of data efficiently.
 
@@ -117,7 +120,7 @@ SELECT mt.country_code, mt.title_id, mt.name, mt.sample_mau, mt.final_mau_estima
 FROM mau_per_title AS mt
 JOIN scaling_factors sf ON mt.country_code = sf.country_code
 ORDER BY mt.country_code, mt.title_id;
-
+```
 ### 4. Error Margin Calculation
 A margin of error is calculated for each MAU estimate based on the sample size, confidence level, and population size. This provided an error range, allowing for more accurate reporting.
 
