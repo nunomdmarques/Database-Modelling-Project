@@ -45,7 +45,7 @@ The first step was to define which data to extract when from the available API e
 - **Internal Install Base Data**: Used to extrapolate the sampled MAUs to the population level for each country. The install base data provides the overall active user estimates for each market.
  
 ### 4.2 Database Design
-A relational database was designed to handle large volumes of data efficiently.
+A relational database was modeled to handle large volumes of data efficiently.
 
 | Table Name     | Primary Key                      | Foreign Key                      | Constraints                          | Relationships                                                     |
 | -------------- | -------------------------------- | --------------------------------- | ------------------------------------ | ------------------------------------------------------------------|
@@ -54,17 +54,23 @@ A relational database was designed to handle large volumes of data efficiently.
 | `titles`       | title_id                         | N/A                               | name UNIQUE, NOT NULL                | One-to-Many: Each title associated with multiple user_activity    |
 | `user_activity`| Composite key: user_id, title_id, timestamp | user_id references users, title_id references titles | N/A | Many-to-One: Many activity records linked to a single user and title |
 
+![Local Picture](./Newzoo_MAUdatabasediagram_NunoMarques.png)
+
 ### 4.3 MAU Calculation Process
-1. Filter user activity data from the last 30 days.
-2. Join with `users` and `install_bases` tables for country-specific install base data.
+1. User activity data is filtered by timestamp to include only activity within the past 30 days. Any records marked as "Offline" are excluded.
+2. The filtered user activity data is joined with the users table (to link users to their country) and the install_bases table (to obtain the install base for each market).
 3. Sample and extrapolate MAUs based on the scaling factor for each country.
-4. Use SQL queries for data extraction, sampling, and scaling:
+4. Unique user_ids are counted to determine the sample size for each country.
+5. The install base for each country is divided by the sample size, producing a scaling factor.
+6. The MAU for each game title in a market is calculated by multiplying the number of unique active users (in the sample) by the scaling factor, thereby estimating the MAU for the entire market.
+
+7. Use SQL queries for data extraction, sampling, and scaling:
 ```sql
 WITH recent_activity AS (
   SELECT ua.user_id, ua.title_id, ua.timestamp, t.name, u.country_code
   FROM user_activity AS ua
-  JOIN titles t ON ua.title_id = t.title_id
-  JOIN users u ON ua.user_id = u.user_id
+  JOIN titles AS t ON ua.title_id = t.title_id
+  JOIN users AS u ON ua.user_id = u.user_id
   WHERE ua.timestamp >= NOW() - INTERVAL '30 days'
     AND ua.title_id != 'Offline'
 )
@@ -73,8 +79,8 @@ WITH recent_activity AS (
 WITH recent_activity AS (
     SELECT ua.user_id, ua.title_id, ua.timestamp, t.name, u.country_code
     FROM user_activity AS ua
-    JOIN titles t ON ua.title_id = t.title_id
-    JOIN users u ON ua.user_id = u.user_id
+    JOIN titles AS t ON ua.title_id = t.title_id
+    JOIN users AS u ON ua.user_id = u.user_id
     WHERE ua.timestamp >= NOW() - INTERVAL '30 days'
       AND ua.title_id != 'Offline'
 ),
@@ -109,7 +115,7 @@ mau_per_title AS (
            sf.scaling_factor, 
            (COUNT(DISTINCT awib.user_id) * sf.scaling_factor) AS final_mau_estimate
     FROM activity_with_install_base AS awib
-    JOIN scaling_factors sf ON awib.country_code = sf.country_code
+    JOIN scaling_factors AS sf ON awib.country_code = sf.country_code
     GROUP BY awib.country_code, awib.title_id, awib.name, sf.scaling_factor
 )
 
@@ -118,19 +124,17 @@ SELECT mt.country_code, mt.title_id, mt.name, mt.sample_mau, mt.final_mau_estima
        -- Margin of error calculation
        1.96 * SQRT((mt.sample_mau / sf.sample_size) * (1 - (mt.sample_mau / sf.sample_size)) / sf.sample_size) AS margin_of_error
 FROM mau_per_title AS mt
-JOIN scaling_factors sf ON mt.country_code = sf.country_code
+JOIN scaling_factors AS sf ON mt.country_code = sf.country_code
 ORDER BY mt.country_code, mt.title_id;
 ```
-### 4. Error Margin Calculation
-A margin of error is calculated for each MAU estimate based on the sample size, confidence level, and population size. This provided an error range, allowing for more accurate reporting.
 
-### 4.5 Possible Improvements
-Several improvements were suggested for future iterations of the project:
-- **MCMAU Data**: Gathering data on the Minimum Consistent MAU (MCMAU) for each region and adjusting the scaling factor monthly.
-- **Scaling Factor Adjustments**: Instead of using yearly install base data, monthly scaling factors based on MCMAU should be applied, as a full install base is unlikely to be active every month.
+#### Possible Improvements
+Given enough time, data on the minimum consistent MAU (MCMAU) per month and per region should be gathered. A different scaling factor should then be recalculated for each month of the year and for every market using these MCMAU values instead of the install base data, as in our defined approach above we are calculating the scaling factor by comparing monthly data to yearly install bases. Additionally, it is almost impossible that a full install base would be active in a month, so using this estimate is further introducing biases to our estimates.
 
-### 4.6 Sampling Strategy
-When selecting a sampling method to estimate MAUs with limited data access, **stratified sampling** was chosen for its accuracy across demographics. 
+### 4.4 Sampling Strategy
+When selecting a sampling method to estimate Monthly Active Users (MAUs) with limited data access, we considered both **stratified sampling** and **cluster sampling**. The key considerations were the need to achieve a representative sample while managing the limitations imposed by incomplete user activity data.
+- **Cluster Sampling** was initially considered but deemed less suitable due to the heterogeneous nature of the clusters (e.g., country, title, or genre). In cluster sampling, entire groups (clusters) are sampled, but if the clusters are highly varied internally, it can lead to inaccurate results and higher sampling errors. Since user behavior across different countries, titles, and genres is expected to be highly diverse, clustering would not adequately capture this variability.
+- **Stratified Sampling** was chosen as the preferred method because it allows for more accurate representation across key demographic and behavioral categories. In stratified sampling, the population is divided into distinct subgroups (strata) based on factors like country, title, or genre. A random sample is then taken from each stratum, ensuring that each subgroup is proportionally represented in the final sample.
 
 #### Why Stratified Sampling?
 - Stratified sampling ensures representativity across various factors like country, title, and genre.
@@ -138,42 +142,62 @@ When selecting a sampling method to estimate MAUs with limited data access, **st
 - **Genre**: Sampling by genre within each market ensured a balanced representation of game types across geographic regions.
 
 #### Example of Stratified Sampling:
-- **Country**: Market A has 30% of the platform's install base, so 30% of the sample is allocated to this market.
-- **Genre**: Genre X is played by 20% of Market A users, so 20% of Market A’s sample is allocated to this genre.
+- **Define Sample Size:**
+  - Let’s say we will look at data for **10,000 users** who have activity data in our intended period.
 
-Random sampling is applied within each stratum, and optional weighting may be introduced if data for certain combinations is sparse.
+- **Definition of strata:**
+  - **Country**: We have install base information at the country level already, so we can use this information to determine the proportion of users we should sample for each country by comparing the total install base to each country’s. This strives for representativity across geography.
+    - **Example**: Market A has 30% of the platform's install base, so we assign **3,000 users** (30% of 10,000) to this market.
+  
+  - **Title or Genre**: By grouping our user activity by title or genre within each country, we can additionally identify the most and least popular genres in each country and determine the proportion we should sample from each genre. This strives for representativity across different kinds of titles. 
+    - It would be best to group by **genre** because grouping by title will be too restrictive due to the large number of titles, many of which will not have enough data for an adequate sample size. Genre, while still ensuring a broad representation of playing habits, allows us to have a less restrictive filter and higher sample sizes for these strata in each market.
+    - **Example**: Genre X in Market A (which we attributed 3,000 users to) is played by 20% of Market A users. We assign **600 users** (20% of 3,000) to this genre in this market.
+
+- **Random Sampling:**
+  - Now we randomly sample active users during the intended study period according to the allotted country and genre proportions.
+
+- **Optional Weighting of Data:**
+  - If, during the study period, we do not have enough user activity data for a specific market/genre combination to match our defined proportions, we may apply **weighting** to the data in that genre or market to more accurately match our desired proportions.
+  - However, this is typically a **complex and lengthy process**, especially when considering multiple genres across several markets. It may also introduce increased **variance** in estimates, particularly for very small sample sizes.
+
 
 ## 5. Anticipating Challenges
+During the project, it was necessary to anticipate challenges that would require troubleshooting and careful problem-solving. The most significant challenges are outlined below, along with the steps suggested to resolve them:
 
 ### 5.1 Query Performance Issues
-As the dataset grows, query performance may degrade. To address this:
-- **Partitioning**: Dynamic range partitioning by timestamp was recommended for the `user_activity` table to handle large datasets efficiently.
-- **Caching and Archiving**: Frequently accessed results can be cached, and older data can be archived to reduce table size and improve performance.
+As the dataset grows, some SQL queries may run slower than expected, delaying analysis and updating of MAU estimates. Optimizing the database will be essential to ensure timely delivery of daily reports. Suggested steps were:
+- **Partitioning**: To handle large datasets more efficiently, partitioning was considered for the user_activity table. A dynamic range partition by timestamp should improve performance for queries focused on the last 30 days, which is the common use case for MAU estimation.
+- **Caching and Archiving**: Frequently accessed results may be cached to reduce query times for routine tasks. Older, less frequently accessed data should be archived, reducing the size of the active tables and improving query performance.
 
 ### 5.2 Data Discrepancies and Client Feedback
-At times, discrepancies may arise between system estimates and client-provided data. The following steps were suggested:
-- **Collaborative Investigation**: Work with clients to understand their data sources and estimation assumptions to identify the causes of divergence.
-- **Adjusting the Model**: Adjust the estimation model when necessary, based on new insights or market-specific factors.
-- **Improved Communication**: Establish a structured process to address client feedback, explaining the investigation process and addressing concerns.
+At times, discrepancies may arise between the MAU estimates produced and internal client data. When clients report significant deltas between the estimates and their internal figures, the following steps should be taken:
+- **Collaborative Investigation**: Engaging with the clients to better understand their data sources, estimation methods, and assumptions. This will help identify potential sources of divergence, such as differences in time frames, sample sizes, or demographic factors.
+- **Adjusting the Model**: In some cases, the estimation model should be adjusted based on new insights from the clients. For example, market-specific factors or changes in install base assumptions may be incorporated to align the estimates more closely with the client’s internal data.
+- **Improved Communication**: A structured response process should bes implemented to handle client queries. This would involve thanking the client for their feedback, explaining the investigation process, and providing potential reasons for the discrepancy. Open communication will help foster trust and allow for continuous improvement of the estimates.
 
 ### 5.3 Ensuring Data Quality
-To maintain data quality, the following steps were recommended:
-- **Scheduled Data Retrieval**: Automated data retrieval at regular intervals ensures timely updates.
-- **Automated Data Tests**: Automated tests were implemented to validate data integrity, check constraints, and enforce data quality standards.
-- **Descriptive Statistics and Outlier Detection**: Descriptive statistics and methods like Z-scores and IQR were used to detect anomalies in the data.
-- **Automated Alerts**: Alerts were set up to notify the team in case of data extraction errors, ensuring quick resolution.
-- **Version Control and Documentation**: Datasets were versioned and changes were documented to ensure full traceability.
+As the estimates should be updated daily, maintaining data quality is critical. A multi-step validation process should be implemented before sending the monthly datasets to clients:
+- **Scheduled Data Retrieval**: Data should be retrieved from the API endpoints at regular intervals using scheduled tasks, ensuring timely updates to the MAU estimates.
+- **Automated Data Tests**: Automated tests should be set up to validate field types, ensure referential integrity (e.g., foreign keys), and enforce constraints such as uniqueness and non-null values. Using dbt for versioning and ETL/ELT processes was my suggestion.
+- **Descriptive Statistics and Outlier Detection**: Descriptive statistics should be automatically generated to compare new estimates against previous data and internal benchmarks. Outliers should be identified using methods such as Z-scores and interquartile range (IQR), and any anomalies flagged for further investigation.
+- **Automated Alerts**: In case of data extraction errors (e.g., API request failures or missing fields), an automated alert system should be set up to notify the team. This would allow for quick resolution of issues before they could affect the dataset's quality.
+  - **Date and Time Validation**: Ensuring that date fields were within the expected range (e.g., no dates in the future or outside of the 30-day window for MAU estimates).
+  - **Country Code Format**: Verifying that all country codes followed the ISO format, ensuring consistent market-level data.
+  - **ID Validations**: Ensuring that all user_id and title_id fields were in the correct format, with no duplicates or invalid entries.
+  - **Range checking**: Checking that user activity aggregated data and MAU estimates values are both below install base values and non-negative
+
+- **Version Control and Documentation**: Each dataset should be versioned, and any changes or corrections made during the QA process should be documented. This ensures full traceability and transparency in case of any issues arising after client delivery.
+- **Cross-Team Validation**: In addition to automated checks, more than one team member should review the dataset to catch any potential blind spots of the main responsible. This peer review process helps ensure that all datasets meet the quality standards before being sent to clients.
 
 ## 6. Conclusion and Key Takeaways
 
-The successful completion of this project resulted in an accurate and scalable method for estimating Monthly Active Users (MAUs) for individual video game titles across a wide range of markets. By leveraging multiple API endpoints, internal install base data, and a robust sampling strategy, the project provided stakeholders with actionable insights into player behavior across various regions.
+The successful completion of this project resulted in the development of an accurate and scalable method for estimating Monthly Active Users (MAUs) for individual game titles across a wide range of markets. By leveraging multiple API endpoints, internal install base data, and a robust sampling strategy, I was able to provide stakeholders with actionable insights into how to obtain the desired player behavior data across multiple games and regions.
 
 ### Key Takeaways:
-- **Scalable Data Pipeline**: A well-designed database model capable of handling large datasets and generating daily MAU estimates.
-- **Sampling Strategy and Data Accuracy**: The use of stratified sampling ensured representative data, even with access limitations.
-- **Query Optimization and Automation**: Optimizations like indexing, partitioning, and automation improved query performance and streamlined the reporting process.
-- **Collaboration and Client Feedback**: Open communication with clients helped resolve data discrepancies and refine estimation models.
+- **Scalable Data Pipeline**:The database was modelled to handle large volumes of data across thousands of titles and markets, ensuring that daily MAU estimates could be delivered reliably and efficiently.
+- **Sampling Strategy and Data Accuracy**: Despite privacy restrictions limiting access to 25% of user activity data, the use of stratified sampling and careful extrapolation ensured that the estimates were representative of the broader population. Regular quality checks and peer reviews further ensured data accuracy.
+- **Query Optimization and Automation**: Query performance challenges were addressed through optimization techniques, including indexing and data partitioning. Automating many aspects of the data retrieval and testing process not only reduced manual effort but also improved the overall efficiency of the monthly reporting workflow.
+- **Collaboration and Client Feedback**:Open communication with clients helped resolve data discrepancies and improve the estimation model, reinforcing the importance of flexibility and collaboration when working with real-world data.
 
-This project demonstrated the value of thoughtful data modeling, accurate sampling strategies, and continuous process improvement to ensure reliable and actionable data for stakeholders.
 This project demonstrated the value of thoughtful data modeling, careful sampling strategies, and the importance of continuous process improvement. The ability to adapt to challenges, optimize for performance, and ensure data accuracy through automation ultimately provided a reliable solution that could support both business objectives and client needs.
 
