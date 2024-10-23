@@ -54,7 +54,7 @@ A relational database was modeled to handle large volumes of data efficiently.
 | `titles`       | title_id                         | N/A                               | name UNIQUE, NOT NULL                | One-to-Many: Each title associated with multiple user_activity    |
 | `user_activity`| Composite key: user_id, title_id, timestamp | user_id references users, title_id references titles | N/A | Many-to-One: Many activity records linked to a single user and title |
 
-![Local Picture](./Newzoo_MAUdatabasediagram_NunoMarques.png)
+![Local Picture](./MAUdatabasediagram_NunoMarques.png)
 
 ### 4.3 MAU Calculation Process
 1. User activity data is filtered by timestamp to include only activity within the past 30 days. Any records marked as "Offline" are excluded.
